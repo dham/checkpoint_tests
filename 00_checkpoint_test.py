@@ -11,12 +11,17 @@ from firedrake.petsc import PETSc
 from firedrake_adjoint import Control, ReducedFunctional, stop_annotating, \
     get_working_tape
 import os
+from firedrake.adjoint.checkpointing import  \
+    enable_disk_checkpointing
+from progress.bar import FillingSquaresBar
+
+
 
 # Reference temperature field file:
-ref_fi_name = "./Ref_temp"
+ref_fi_name = "./reference_temperature.h5"
 
 # Checking if the file exists
-if not os.path.isfile(ref_fi_name+".h5"):
+if not os.path.isfile(ref_fi_name):
     raise ValueError(f"Assembly of the functional needs: {ref_fi_name}")
 
 # logging.set_log_level(1)
@@ -25,11 +30,16 @@ if not os.path.isfile(ref_fi_name+".h5"):
 # Geometric Constants:
 x_max, y_max, disc_n = 1.0, 1.0, 100
 
+enable_disk_checkpointing(cleanup=False)
 # and Interval mesh of unit size
-mesh1d = IntervalMesh(disc_n, length_or_left=0.0, right=x_max)
-# extruding the base mesh "mesh1d" in the third dimension
-mesh = ExtrudedMesh(mesh=mesh1d, layers=disc_n, layer_height=y_max/disc_n,
-                    extrusion_type='uniform', kernel=None, gdim=None)
+# mesh1d = IntervalMesh(disc_n, length_or_left=0.0, right=x_max)
+# # extruding the base mesh "mesh1d" in the third dimension
+# mesh = ExtrudedMesh(mesh=mesh1d, layers=disc_n, layer_height=y_max/disc_n,
+#                     extrusion_type='uniform', kernel=None, gdim=None)
+
+with CheckpointFile(ref_fi_name, "r") as infile:
+    mesh = infile.load_mesh("firedrake_default_extruded")
+    final_state = infile.load_function(mesh, "RefTemperature")
 
 
 # Print function to ensure log output is only written on processor zero (if
@@ -52,13 +62,14 @@ yhat = as_vector((0, y)) / y_abs
 
 # Global Constants:
 Ra = Constant(1e7)
-max_num_timesteps = 40
+max_num_timesteps = 4
 delta_t = Constant(5e-6)
 kappa = Constant(1.0)
 
 # Below are callbacks relating to the adjoint solutions (accessed through
 # solve). Not sure what the best place would be to initiate working tape!
 tape = get_working_tape()
+tape.progress_bar = FillingSquaresBar
 
 # Temporal discretisation - Using a Crank-Nicholson scheme where theta_ts =
 # 0.5:
@@ -81,12 +92,12 @@ z = Function(Z)  # a field over the mixed function space Z.
 u, p = split(z)     # can we nicely name mixed function space fields?
 
 # Final states the like of tomography, note that we also load the reference
-# profile.
-final_state = Function(Q, name='RefTemperature')
+# # profile.
+# final_state = Function(Q, name='RefTemperature')
 
-final_state_file = DumbCheckpoint("../../forward/State_100", mode=FILE_READ)
-final_state_file.load(final_state, 'Temperature')
-final_state_file.close()
+# final_state_file = DumbCheckpoint("../../forward/State_100", mode=FILE_READ)
+# final_state_file.load(final_state, 'Temperature')
+# final_state_file.close()
 
 # Initial condition, let's start with the final condition
 Tic = Function(Q, name="T_IC")
@@ -146,7 +157,7 @@ energy_solver = NonlinearVariationalSolver(energy_problem)
 control = Control(Tic)
 
 # Now perform the time loop:
-for timestep in range(0, max_num_timesteps):
+for timestep in FillingSquaresBar("Forward solve").iter(range(max_num_timesteps)):
     # Solve system - configured for solving non-linear systems, where
     # everything is on the LHS (as above) and the RHS == 0.
     stokes_solver.solve()
@@ -165,7 +176,10 @@ grd_file = File("gradients.pvd")
 
 # Constructing the ReducedFunctional
 reduced_functional = ReducedFunctional(functional, control)
-
+print(tape._checkpoint_metadata.current_checkpoint_file)
+print(tape._checkpoint_metadata.init_checkpoint_file)
+import networkx as nx
+nx.nx_agraph.to_agraph(tape.create_graph()).draw("tape.pdf", prog="dot")
 # Calculations of RF and gradient for two arbitrary control values for Tic
 # The gradients are writted out for visualisation
 with stop_annotating():
