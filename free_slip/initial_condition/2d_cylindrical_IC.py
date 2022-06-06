@@ -11,7 +11,7 @@ dx = dx(degree=6)
 rmin, rmax = 1.22, 2.22
 
 # Construct a circle mesh and then extrude into a cylinder:
-mesh = Mesh('mesh/transfinite.msh') # This mesh was generated via gmshmesh
+mesh = Mesh('../mesh/transfinite.msh')  # This mesh was generated via gmshmesh
 bottom_id, top_id = 1, 2
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
@@ -189,7 +189,7 @@ energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=energy_solver_parameters)
 
 # Now perform the time loop:
-for timestep in range(0, max_timesteps):
+for timestep in ProgressBar("Time step").iter(range(0, max_timesteps)):
 
     # Write output:
     if timestep % dump_period == 0:
@@ -215,11 +215,7 @@ for timestep in range(0, max_timesteps):
 
 f.close()
 
-# Write final state:
-final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
-final_checkpoint_data.store(Tnew, name="Temperature")
-final_checkpoint_data.close()
 
-final_checkpoint_data = DumbCheckpoint("Final_Stokes_State", mode=FILE_CREATE)
-final_checkpoint_data.store(z, name="Stokes")
-final_checkpoint_data.close()
+with CheckpointFile("Final_State_Computed.h5", "w") as outfile:
+    outfile.save_function(Tnew, name="Temperature")
+    outfile.save_function(z, name="Stokes")

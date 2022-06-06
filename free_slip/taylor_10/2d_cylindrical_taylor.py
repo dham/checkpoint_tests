@@ -4,9 +4,12 @@ from mpi4py import MPI
 import numpy as np
 from firedrake_adjoint import *
 from pyadjoint.tape import no_annotations, Tape, set_working_tape
+from progress.bar import ChargingBar
 import time
 import sys
 PETSc.Sys.popErrorHandler()
+
+mybar = lambda *args: ChargingBar(*args, check_tty=False)
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -15,7 +18,11 @@ dx = dx(degree=6)
 rmin, rmax = 1.22, 2.22
 
 # Construct a circle mesh and then extrude into a cylinder:
-mesh = Mesh('mesh/transfinite.msh') # This mesh was generated via gmshmesh
+with CheckpointFile("../forward_10/Final_State.h5", "r") as infile:
+    mesh = infile.load_mesh()
+    # Final states the like of tomography, note that we also load the reference profile 
+    final_state = infile.load_function(mesh, "Temperature")
+
 bottom_id, top_id = 1, 2
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
@@ -59,17 +66,12 @@ Told, Tnew = Function(Q, name="OldTemp"), Function(Q, name="NewTemp")
 # Towards the bottom of the script are callbacks relating to the adjoint solutions (accessed through solve).
 # We need to initiate the tape to make these work. 
 tape = get_working_tape()
-
+tape.progress_bar = mybar
 
 # Reference Initial State
 # This will be used for "True Misfit" calculations
 true_initial_state = Function(Q, name='TrueInitialState')
 
-# Final states the like of tomography, note that we also load the reference profile 
-final_state = Function(Q, name='RefTemperature')
-final_state_file = DumbCheckpoint("../forward_10/Final_Temperature_State", mode=FILE_READ)
-final_state_file.load(final_state, 'Temperature')
-final_state_file.close()
 
 # Initial condition, let's start with the final condition
 Tic = Function(Q, name="T_IC")
@@ -190,7 +192,7 @@ energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=ene
 control = Control(Tic)
 
 # Now perform the time loop:
-for timestep in range(0, max_timesteps):
+for timestep in mybar("Forward model").iter(range(0, max_timesteps)):
 
     # Solve Stokes sytem:
     stokes_solver.solve()
@@ -217,5 +219,5 @@ T_ub.assign(1.0)
 Delta_temp = Function(Q, name="Delta_Temperature")
 Delta_temp.dat.data[:] = np.random.random(Delta_temp.dat.data.shape)*0.5
 minconv = taylor_test(reduced_functional, Tic, Delta_temp)
-print (minconv)
+print(minconv)
 sys.exit(0)

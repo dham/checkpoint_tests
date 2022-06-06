@@ -1,7 +1,6 @@
 from firedrake import *
 from firedrake.petsc import PETSc
-from mpi4py import MPI
-import numpy as np
+from progress.bar import ChargingBar
 PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
@@ -11,7 +10,9 @@ dx = dx(degree=6)
 rmin, rmax = 1.22, 2.22
 
 # Construct a circle mesh and then extrude into a cylinder:
-mesh = Mesh('mesh/transfinite.msh') # This mesh was generated via gmshmesh
+with CheckpointFile("../initial_condition/Final_State.h5", "r") as infile:
+    mesh = infile.load_mesh()
+    Told = infile.load_function(mesh, "OldTemp")
 bottom_id, top_id = 1, 2
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
@@ -50,12 +51,7 @@ log("Number of Temperature DOF:", Q.dim())
 # Set up temperature field and initialise:
 X = SpatialCoordinate(mesh)
 r = sqrt(X[0]**2 + X[1]**2)
-Told, Tnew = Function(Q, name="OldTemp"), Function(Q, name="NewTemp")
-
-# Initialise from previous run:
-InitialStateFile = DumbCheckpoint("../initial_condition/Final_Temperature_State", mode=FILE_READ)
-InitialStateFile.load(Told, "Temperature")
-InitialStateFile.close()
+Tnew = Function(Q, name="NewTemp")
 
 Tnew.assign(Told)
 
@@ -116,7 +112,7 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
 E = Constant(2.302585092994046)  # Activation energy for temperature dependent viscosity.
-mu = exp( E * (0.5 - Tnew) )  # Viscosity
+mu = exp(E * (0.5 - Tnew))  # Viscosity
 mu_f = Function(W, name="Viscosity")
 
 stress = 2 * mu * sym(grad(u))
@@ -164,7 +160,7 @@ stokes_solver = NonlinearVariationalSolver(
     stokes_problem,
     solver_parameters=stokes_solver_parameters,
     appctx={"mu": mu},
-#    nullspace=Z_nullspace,
+    # nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace
 )
@@ -172,7 +168,7 @@ energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=energy_solver_parameters)
 
 # Now perform the time loop:
-for timestep in range(0, max_timesteps):
+for timestep in ChargingBar("Forward model", check_tty=False).iter(range(0, max_timesteps)):
 
     # Write output:
     if timestep % dump_period == 0:
@@ -188,7 +184,7 @@ for timestep in range(0, max_timesteps):
     energy_solver.solve()
 
     # Log diagnostics:
-    log_params(f, f"{timestep} {time} {float(delta_t)}" )
+    log_params(f, f"{timestep} {time} {float(delta_t)}")
 
     # Set Told = Tnew - assign the values of Tnew to Told
     Told.assign(Tnew)
@@ -196,10 +192,6 @@ for timestep in range(0, max_timesteps):
 f.close()
 
 # Write final state:
-final_checkpoint_data = DumbCheckpoint("Final_Temperature_State", mode=FILE_CREATE)
-final_checkpoint_data.store(Tnew, name="Temperature")
-final_checkpoint_data.close()
-
-final_checkpoint_data = DumbCheckpoint("Final_Stokes_State", mode=FILE_CREATE)
-final_checkpoint_data.store(z, name="Stokes")
-final_checkpoint_data.close()
+with CheckpointFile("Final_State.h5", "w") as outfile:
+    outfile.save_function(Tnew, name="Temperature")
+    outfile.save_function(z, name="Stokes")
