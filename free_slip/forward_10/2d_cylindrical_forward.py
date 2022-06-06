@@ -1,6 +1,5 @@
 from firedrake import *
 from firedrake.petsc import PETSc
-from progress.bar import ChargingBar
 PETSc.Sys.popErrorHandler()
 
 # Quadrature degree:
@@ -10,9 +9,9 @@ dx = dx(degree=6)
 rmin, rmax = 1.22, 2.22
 
 # Construct a circle mesh and then extrude into a cylinder:
-with CheckpointFile("../initial_condition/Final_State.h5", "r") as infile:
+with CheckpointFile("../initial_condition/Final_State_Computed.h5", "r") as infile:
     mesh = infile.load_mesh()
-    Told = infile.load_function(mesh, "OldTemp")
+    Told = infile.load_function(mesh, "Temperature")
 bottom_id, top_id = 1, 2
 n = FacetNormal(mesh)  # Normals, required for Nusselt number calculation
 domain_volume = assemble(1*dx(domain=mesh))  # Required for diagnostics (e.g. RMS velocity)
@@ -168,7 +167,7 @@ energy_problem = NonlinearVariationalProblem(F_energy, Tnew, bcs=[bctb, bctt])
 energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=energy_solver_parameters)
 
 # Now perform the time loop:
-for timestep in ChargingBar("Forward model", check_tty=False).iter(range(0, max_timesteps)):
+for timestep in ProgressBar("Forward model").iter(range(0, max_timesteps)):
 
     # Write output:
     if timestep % dump_period == 0:
