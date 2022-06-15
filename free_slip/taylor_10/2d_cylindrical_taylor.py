@@ -1,15 +1,11 @@
 from firedrake import *
 from firedrake.petsc import PETSc
-from mpi4py import MPI
 import numpy as np
 from firedrake_adjoint import *
-from pyadjoint.tape import no_annotations, Tape, set_working_tape
-from progress.bar import ChargingBar
-import time
 import sys
 PETSc.Sys.popErrorHandler()
 
-mybar = lambda *args: ChargingBar(*args, check_tty=False)
+enable_disk_checkpointing()
 
 # Quadrature degree:
 dx = dx(degree=6)
@@ -19,8 +15,8 @@ rmin, rmax = 1.22, 2.22
 
 # Construct a circle mesh and then extrude into a cylinder:
 with CheckpointFile("../forward_10/Final_State.h5", "r") as infile:
-    mesh = infile.load_mesh()
-    # Final states the like of tomography, note that we also load the reference profile 
+    mesh = checkpointable_mesh(infile.load_mesh())
+    # Final states the like of tomography, note that we also load the reference profile
     final_state = infile.load_function(mesh, "Temperature")
 
 bottom_id, top_id = 1, 2
@@ -64,9 +60,9 @@ r = sqrt(X[0]**2 + X[1]**2)
 Told, Tnew = Function(Q, name="OldTemp"), Function(Q, name="NewTemp")
 
 # Towards the bottom of the script are callbacks relating to the adjoint solutions (accessed through solve).
-# We need to initiate the tape to make these work. 
+# We need to initiate the tape to make these work.
 tape = get_working_tape()
-tape.progress_bar = mybar
+tape.progress_bar = ProgressBar
 
 # Reference Initial State
 # This will be used for "True Misfit" calculations
@@ -77,7 +73,7 @@ true_initial_state = Function(Q, name='TrueInitialState')
 Tic = Function(Q, name="T_IC")
 Tic.project(final_state)
 
-# Set up temperature field and initialise it with present day 
+# Set up temperature field and initialise it with present day
 Told = Function(Q, name="OldTemperature")
 Told.assign(Tic)
 Tnew.assign(Told)
@@ -138,7 +134,7 @@ kappa = Constant(1.0)  # Thermal diffusivity
 
 # Stokes equations in UFL form:
 E = Constant(2.302585092994046)  # Activation energy for temperature dependent viscosity.
-mu = exp( E * (0.5 - Tnew) )  # Viscosity
+mu = exp(E * (0.5 - Tnew))  # Viscosity
 mu_f = Function(W, name="Viscosity")
 
 stress = 2 * mu * sym(grad(u))
@@ -181,7 +177,7 @@ stokes_solver = NonlinearVariationalSolver(
     stokes_problem,
     solver_parameters=stokes_solver_parameters,
     appctx={"mu": mu},
-#    nullspace=Z_nullspace,
+    # nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace
 )
@@ -192,7 +188,7 @@ energy_solver = NonlinearVariationalSolver(energy_problem, solver_parameters=ene
 control = Control(Tic)
 
 # Now perform the time loop:
-for timestep in mybar("Forward model").iter(range(0, max_timesteps)):
+for timestep in ProgressBar("Forward model").iter(range(0, max_timesteps)):
 
     # Solve Stokes sytem:
     stokes_solver.solve()
@@ -203,7 +199,7 @@ for timestep in mybar("Forward model").iter(range(0, max_timesteps)):
     # Set Told = Tnew - assign the values of Tnew to Told
     Told.assign(Tnew)
 
-## Initialise functional
+# Initialise functional
 functional = assemble(0.5*(Tnew - final_state)**2 * dx)
 
 # Defining the object for pyadjoint
